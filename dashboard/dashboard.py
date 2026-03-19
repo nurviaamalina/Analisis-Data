@@ -5,90 +5,122 @@ import seaborn as sns
 
 st.set_page_config(page_title="Olist Dashboard", layout="wide")
 
+sns.set(style="whitegrid")
+
 # -------------------------
-# Load Dataset
+# Load Data
 # -------------------------
 @st.cache_data
 def load_data():
-    # Load Orders dengan parse tanggal
-    orders_df = pd.read_csv("data/olist_orders_dataset.csv", 
-                            parse_dates=['order_purchase_timestamp', 
-                                         'order_approved_at', 
-                                         'order_delivered_carrier_date', 
-                                         'order_delivered_customer_date', 
-                                         'order_estimated_delivery_date'])
-    
-    # Load Order Items
-    order_items_df = pd.read_csv("data/olist_order_items_dataset.csv")
-    
-    # Load Products
-    products_df = pd.read_csv("data/olist_products_dataset.csv")
-    
-    # Merge order_items dengan products untuk kategori
-    merged_df = pd.merge(order_items_df, 
-                         products_df[['product_id','product_category_name']],
-                         on='product_id', how='left')
-    
-    return orders_df, order_items_df, products_df, merged_df
+    orders = pd.read_csv("data/olist_orders_dataset.csv",
+                         parse_dates=['order_purchase_timestamp'])
+    items = pd.read_csv("data/olist_order_items_dataset.csv")
+    products = pd.read_csv("data/olist_products_dataset.csv")
 
-# Load data
-orders_df, order_items_df, products_df, merged_df = load_data()
+    df = items.merge(orders, on='order_id')
+    df = df.merge(products, on='product_id')
+
+    return df
+
+df = load_data()
 
 # -------------------------
-# Dashboard
+# CLEANING 
 # -------------------------
-st.title("📊 Olist E-commerce Dashboard")
-
-# -------------------------
-# Tabel Data Mentah
-# -------------------------
-st.header("Preview Data")
-st.subheader("Orders")
-st.dataframe(orders_df.head(10))
-
-st.subheader("Order Items")
-st.dataframe(order_items_df.head(10))
-
-st.subheader("Products")
-st.dataframe(products_df.head(10))
+df = df.dropna(subset=['product_category_name'])
+df['year'] = df['order_purchase_timestamp'].dt.year
+df['month'] = df['order_purchase_timestamp'].dt.to_period('M').astype(str)
 
 # -------------------------
-# 1. Kategori Produk Terlaris
+# SIDEBAR FILTER
 # -------------------------
-st.header("Top 10 Kategori Produk Terlaris")
-kategori_count = merged_df['product_category_name'].value_counts().head(10)
+st.sidebar.header("Filter")
 
-fig, ax = plt.subplots(figsize=(7,4))
-sns.barplot(x=kategori_count.values, y=kategori_count.index, palette='viridis', ax=ax)
-ax.set_xlabel("Jumlah Penjualan")
-ax.set_ylabel("Kategori Produk")
-st.pyplot(fig)
+year = st.sidebar.multiselect(
+    "Tahun",
+    options=sorted(df['year'].unique()),
+    default=sorted(df['year'].unique())
+)
+
+category = st.sidebar.multiselect(
+    "Kategori",
+    options=sorted(df['product_category_name'].unique()),
+    default=sorted(df['product_category_name'].unique())
+)
+
+status = st.sidebar.multiselect(
+    "Status",
+    options=df['order_status'].unique(),
+    default=df['order_status'].unique()
+)
+
+filtered_df = df[
+    (df['year'].isin(year)) &
+    (df['product_category_name'].isin(category)) &
+    (df['order_status'].isin(status))
+]
 
 # -------------------------
-# 2. Distribusi Jumlah Produk per Pesanan
+# TITLE
 # -------------------------
-st.header("Distribusi Jumlah Produk per Pesanan")
-produk_per_order = merged_df.groupby('order_id')['product_id'].count()
+st.title("📊 Olist E-Commerce Dashboard")
 
-fig, ax = plt.subplots(figsize=(7,4))
-sns.histplot(produk_per_order, bins=20, kde=False, color='skyblue', ax=ax)
-ax.set_xlim(0, 10)
-ax.set_xlabel("Jumlah Produk per Pesanan")
-ax.set_ylabel("Jumlah Pesanan")
-st.pyplot(fig)
-
-st.write(f"Rata-rata jumlah produk per pesanan: **{produk_per_order.mean():.2f}**")
 
 # -------------------------
-# 3. Trend Penjualan Bulanan
+# KPI (BIAR KEREN)
 # -------------------------
-st.header("Trend Jumlah Pesanan per Bulan")
-orders_df['month'] = orders_df['order_purchase_timestamp'].dt.to_period('M')
-trend_bulanan = orders_df.groupby('month').size()
+col1, col2, col3 = st.columns(3)
 
-fig, ax = plt.subplots(figsize=(8,3))
-trend_bulanan.plot(marker='o', ax=ax)
-ax.set_xlabel("Bulan")
-ax.set_ylabel("Jumlah Pesanan")
+col1.metric("Total Order", filtered_df['order_id'].nunique())
+col2.metric("Total Produk Terjual", filtered_df.shape[0])
+col3.metric("Jumlah Kategori", filtered_df['product_category_name'].nunique())
+
+# -------------------------
+# CHART 1: Top Kategori
+# -------------------------
+st.subheader("🏆 Top 10 Kategori Produk")
+
+top_cat = (filtered_df.groupby('product_category_name')
+           .size()
+           .sort_values(ascending=False)
+           .head(10))
+
+fig1, ax1 = plt.subplots(figsize=(8,5))
+sns.barplot(x=top_cat.values, y=top_cat.index, ax=ax1)
+ax1.set_xlabel("Jumlah Terjual")
+ax1.set_ylabel("Kategori")
+
+st.pyplot(fig1)
+
+# -------------------------
+# CHART 2: Tren Penjualan
+# -------------------------
+st.subheader("📈 Tren Penjualan per Bulan")
+
+trend = filtered_df.groupby('month').size()
+
+fig2, ax2 = plt.subplots(figsize=(10,5))
+trend.plot(ax=ax2)
+ax2.set_xlabel("Bulan")
+ax2.set_ylabel("Jumlah Order")
 plt.xticks(rotation=45)
-st.pyplot(fig)
+
+st.pyplot(fig2)
+
+# -------------------------
+# CHART 3: Status Pesanan
+# -------------------------
+st.subheader("📦 Distribusi Status Pesanan")
+
+status_count = filtered_df['order_status'].value_counts()
+
+fig3, ax3 = plt.subplots()
+ax3.pie(status_count, labels=status_count.index, autopct='%1.1f%%')
+
+st.pyplot(fig3)
+
+# -------------------------
+# DATA TABLE
+# -------------------------
+st.subheader("📋 Data Detail")
+st.dataframe(filtered_df.head(100))
